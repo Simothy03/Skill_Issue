@@ -1,139 +1,225 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export default function DashboardPage() {
   const [userInfo, setUserInfo] = useState(null);
-  const [loadingUser, setLoadingUser] = useState(true);
-  const [chessUsername, setChessUsername] = useState('');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  
+  // State for the "Link Account" form
+  const [linkUsername, setLinkUsername] = useState('');
+  const [linkMessage, setLinkMessage] = useState('');
+
+  // State for analysis
   const [analysisResults, setAnalysisResults] = useState(null);
-  const [loadingAnalysis, setLoadingAnalysis] = useState(false);
-  const [analysisError, setAnalysisError] = useState('');
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  
+  const navigate = useNavigate();
 
-  // Fetch user status on component mount
-  useEffect(() => {
-    const fetchUserStatus = async () => {
-      try {
-        setLoadingUser(true);
-        // Use credentials: 'include' to send session cookies
-        const response = await fetch('http://localhost:5000/api/user/status', {credentials: 'include'});
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        if (data.logged_in) {
-          setUserInfo(data.user_info);
-        } else {
-          // Handle case where user is somehow not logged in
-          // Maybe redirect back to login?
-           window.location.href = '/login?error=not_logged_in';
-        }
-      } catch (error) {
-        console.error("Failed to fetch user status:", error);
-        // Handle error, maybe redirect to login
-         window.location.href = '/login?error=status_fetch_failed';
-      } finally {
-        setLoadingUser(false);
+  // Function to fetch user status (we'll call this on load and after linking)
+  const fetchUserStatus = async () => {
+    try {
+      // Fetch with credentials to send the session cookie
+      const response = await fetch('http://localhost:5000/api/user/status', {
+        method: 'GET',
+        credentials: 'include', // Important: sends cookies
+      });
+      
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
       }
-    };
 
+      const data = await response.json();
+      if (data.logged_in) {
+        setIsLoggedIn(true);
+        setUserInfo(data.user_info);
+      } else {
+        setIsLoggedIn(false);
+        navigate('/login?error=session_expired'); // Redirect if not logged in
+      }
+    } catch (err) {
+      setError('Failed to fetch user status. Please try refreshing.');
+      setIsLoggedIn(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch user status on component load
+  useEffect(() => {
     fetchUserStatus();
-  }, []); // Empty dependency array means this runs once on mount
+  }, [navigate]); // Add navigate as a dependency
 
-  // Handle analysis form submission
-  const handleAnalyzeSubmit = async (e) => {
+  // Handler for the "Link Account" form
+  const handleLinkAccount = async (e) => {
     e.preventDefault();
-    setLoadingAnalysis(true);
+    setLinkMessage(''); // Clear previous messages
+    if (!linkUsername) {
+      setLinkMessage('Please enter a username.');
+      return;
+    }
+
+    try {
+      const response = await fetch('http://localhost:5000/api/user/link_chess_account', {
+        method: 'POST',
+        credentials: 'include', // Send cookies
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ username: linkUsername }),
+      });
+      
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to link account');
+      }
+
+      setLinkMessage(data.message || 'Account linked!');
+      // Refresh user info to show the new "Analyze" button
+      await fetchUserStatus(); 
+      setLinkUsername(''); // Clear input
+      
+    } catch (err) {
+      setLinkMessage(err.message);
+    }
+  };
+
+  // Handler for the "Analyze" button
+  const handleAnalyze = async () => {
     setAnalysisResults(null);
-    setAnalysisError('');
+    setAnalysisLoading(true);
+    setError('');
 
     try {
       const response = await fetch('http://localhost:5000/api/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // Use credentials: 'include' is needed to send session cookie for protected route
-        credentials: 'include',
-        body: JSON.stringify({ username: chessUsername })
+        credentials: 'include', // Send cookies
+        // No body is needed, backend uses the logged-in user's linked account
       });
+      
+      const data = await response.json();
 
       if (!response.ok) {
-         const errorData = await response.json();
-         throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        throw new Error(data.error || 'Analysis failed');
       }
-
-      const data = await response.json();
+      
       setAnalysisResults(data);
-    } catch (error) {
-       console.error("Analysis failed:", error);
-       setAnalysisError(error.message || "Failed to analyze games.");
+    } catch (err) {
+      setError(err.message);
     } finally {
-      setLoadingAnalysis(false);
+      setAnalysisLoading(false);
     }
   };
 
-  if (loadingUser) {
-    return <div className="min-h-screen bg-gray-100 flex items-center justify-center">Loading user info...</div>;
+  // Show loading spinner while checking auth
+  if (loading) {
+    return <div className="min-h-screen bg-gray-100 flex items-center justify-center"><p>Loading...</p></div>;
+  }
+  
+  // Show this if user is somehow not logged in
+  if (!isLoggedIn) {
+     // This shouldn't be seen if the useEffect redirect works, but it's good practice
+    return <div className="min-h-screen bg-gray-100 flex items-center justify-center"><p>Please <a href="/login" className="text-blue-600">login</a>.</p></div>;
   }
 
-  if (!userInfo) {
-     // This shouldn't be reached if the redirect works, but good as a fallback
-    return <div className="min-h-screen bg-gray-100 flex items-center justify-center">Could not load user info. Please try logging in again.</div>;
-  }
-
+  // Main dashboard content
   return (
     <div className="min-h-screen bg-gray-100 p-8">
       <div className="max-w-4xl mx-auto bg-white p-6 rounded-lg shadow-md">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Skill Issue Dashboard</h1>
-            <p className="text-gray-600">Welcome, {userInfo.name || userInfo.email}!</p>
-          </div>
+        
+        <div className="flex justify-between items-center mb-4">
+          <h1 className="text-3xl font-bold text-gray-900">
+            Welcome, {userInfo?.name || 'User'}!
+          </h1>
           <a
-            href="http://localhost:5000/logout" // Link to backend logout
-            className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+            href="http://localhost:5000/logout"
+            className="px-4 py-2 bg-red-600 text-white font-semibold rounded-md shadow-sm hover:bg-red-500"
           >
             Logout
           </a>
         </div>
+        <p className="text-gray-600 mb-6">Email: {userInfo?.email}</p>
 
-        {/* Analysis Form */}
-        <form onSubmit={handleAnalyzeSubmit} className="mb-8">
-          <label htmlFor="chessUsername" className="block text-sm font-medium text-gray-700 mb-1">
-            Enter Chess.com Username to Analyze
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              id="chessUsername"
-              value={chessUsername}
-              onChange={(e) => setChessUsername(e.target.value)}
-              className="flex-grow block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-              placeholder="e.g., hikaru"
-            />
-            <button
-              type="submit"
-              disabled={loadingAnalysis}
-              className={`px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white ${
-                loadingAnalysis ? 'bg-indigo-300' : 'bg-indigo-600 hover:bg-indigo-700'
-              } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500`}
-            >
-              {loadingAnalysis ? 'Analyzing...' : 'Analyze Games'}
-            </button>
+        <hr className="my-6" />
+
+        {/* === CONDITIONAL SECTION === */}
+        {/* Check if chess_com_username is linked */}
+        {!userInfo?.chess_com_username ? (
+          // STATE 1: No username is linked
+          <div>
+            <h2 className="text-2xl font-semibold mb-4">Link Your Chess.com Account</h2>
+            <p className="text-gray-600 mb-4">
+              To begin analyzing your games, please link your Chess.com account.
+            </p>
+            <form onSubmit={handleLinkAccount}>
+              <label htmlFor="link-username" className="block text-sm font-medium text-gray-700">
+                Chess.com Username
+              </label>
+              <div className="mt-1 flex rounded-md shadow-sm">
+                <input
+                  type="text"
+                  id="link-username"
+                  value={linkUsername}
+                  onChange={(e) => setLinkUsername(e.target.value)}
+                  className="flex-1 block w-full rounded-none rounded-l-md border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm px-3 py-2"
+                  placeholder="e.g., Hikaru"
+                />
+                <button
+                  type="submit"
+                  className="inline-flex items-center rounded-r-md border border-l-0 border-gray-300 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                >
+                  Link Account
+                </button>
+              </div>
+              {linkMessage && (
+                <p className={`mt-2 text-sm ${linkMessage.includes('failed') || linkMessage.includes('Error') || linkMessage.includes('already linked') ? 'text-red-600' : 'text-green-600'}`}>
+                  {linkMessage}
+                </p>
+              )}
+            </form>
           </div>
-        </form>
-
-        {/* Analysis Results */}
-        {analysisError && (
-            <div className="mt-4 p-4 bg-red-100 text-red-700 border border-red-300 rounded-md">
-                <p><strong>Error:</strong> {analysisError}</p>
-            </div>
+        ) : (
+          // STATE 2: Username is linked
+          <div>
+            <h2 className="text-2xl font-semibold mb-4">Analyze Your Games</h2>
+            <p className="text-gray-600 mb-4">
+              Your linked Chess.com account: <strong className="text-gray-900">{userInfo.chess_com_username}</strong>
+            </p>
+            <p className="text-gray-600 mb-4">
+              Click the button below to fetch and analyze your latest games. (This will analyze the first game from 2023 for now).
+            </p>
+            <button
+              onClick={handleAnalyze}
+              disabled={analysisLoading}
+              className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-sm hover:bg-indigo-500 disabled:bg-gray-400"
+            >
+              {analysisLoading ? 'Analyzing...' : 'Analyze My Games'}
+            </button>
+            <p className="text-sm text-gray-500 mt-2">
+              Want to analyze a different account? You can change your linked account on your Profile page (coming soon).
+            </p>
+          </div>
         )}
+
+        {/* === Analysis Results Section === */}
+        {error && (
+          <div className="mt-6 p-4 bg-red-100 text-red-700 rounded-md">
+            <h3 className="font-bold">Error</h3>
+            <p>{error}</p>
+          </div>
+        )}
+        
         {analysisResults && (
           <div className="mt-6">
-            <h2 className="text-xl font-semibold text-gray-800">Analysis Results</h2>
-            <pre className="mt-2 p-4 bg-gray-800 text-white rounded-md overflow-x-auto text-sm">
+            <h2 className="text-2xl font-semibold mb-4">Analysis Results</h2>
+            <pre className="bg-gray-900 text-white p-4 rounded-md overflow-x-auto">
               {JSON.stringify(analysisResults, null, 2)}
             </pre>
           </div>
         )}
+
       </div>
     </div>
   );

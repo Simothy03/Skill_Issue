@@ -1,30 +1,112 @@
 import os
+import psycopg2
 from flask import Flask, request, jsonify, redirect, url_for, session, g
 from flask_cors import CORS
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from dotenv import load_dotenv
 from google_auth_oauthlib.flow import Flow
 import requests
 import json
 import traceback
+import chess.engine # <-- Import chess engine
 
 # Import your functions from the backend module
-# Ensure the 'backend' folder is in the same directory as main.py
-# and contains __init__.py and matches.py
 try:
     from backend import matches
+    from backend import analysis # <-- Import the new analysis module
 except ImportError as e:
-    print(f"Error importing 'matches' module from 'backend': {e}")
-    print("Ensure 'backend' folder exists, contains '__init__.py', and 'matches.py'")
-    # You might want to exit or raise the error depending on requirements
-    matches = None # Set to None so later checks fail gracefully
+    print(f"Error importing from 'backend' module: {e}")
+    # This is often a relative import issue. Try 'from . import matches'
+    # in your __init__.py or adjust your PYTHONPATH
+    matches = None
+    analysis = None
 
 # --- App Initialization ---
 load_dotenv()
 app = Flask(__name__)
-CORS(app, supports_credentials=True) # supports_credentials=True allows cookies to be sent/received
-app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'default-secret-key-please-change')
-if app.config['SECRET_KEY'] == 'default-secret-key-please-change':
-    print("Warning: FLASK_SECRET_KEY is not set. Using default (unsafe) key.")
+CORS(app, supports_credentials=True)
+app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY')
+DATABASE_URL = os.environ.get('DATABASE_URL')
+STOCKFISH_PATH = os.environ.get('STOCKFISH_PATH') # <-- Get Stockfish path
+
+if not app.config['SECRET_KEY'] or not DATABASE_URL or not STOCKFISH_PATH:
+    print("Error: FLASK_SECRET_KEY, DATABASE_URL, or STOCKFISH_PATH not found.")
+
+# --- Database and Engine Connection Management ---
+
+def get_db():
+    """Opens a new database connection if there is none yet."""
+    if 'db' not in g:
+        try:
+            g.db = psycopg2.connect(DATABASE_URL)
+        except psycopg2.Error as e:
+            print(f"Error connecting to database: {e}")
+            raise
+    return g.db
+
+def get_engine():
+    """Opens a new Stockfish engine if there is none yet."""
+    if 'engine' not in g:
+        try:
+            g.engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+        except Exception as e:
+            print(f"Error starting Stockfish engine: {e}")
+            raise
+    return g.engine
+
+@app.teardown_appcontext
+def close_connections(error):
+    """Closes database and engine at the end of the request."""
+    db = g.pop('db', None)
+    if db is not None:
+        db.close()
+        
+    engine = g.pop('engine', None)
+    if engine is not None:
+        engine.quit()
+
+# --- User Class (to work with Flask-Login) ---
+class User(UserMixin):
+    def __init__(self, id, google_id, email, name, chess_com_username, created_at):
+        self.id = id
+        self.google_id = google_id
+        self.email = email
+        self.name = name
+        self.chess_com_username = chess_com_username
+        self.created_at = created_at
+
+# --- Flask-Login Setup ---
+login_manager = LoginManager()
+login_manager.init_app(app)
+
+@login_manager.user_loader
+def load_user(user_id):
+    db_conn = get_db()
+    cursor = None
+    try:
+        cursor = db_conn.cursor()
+        cursor.execute("SELECT id, google_id, email, name, chess_com_username, created_at FROM users WHERE id = %s", (int(user_id),))
+        user_data = cursor.fetchone()
+        if user_data:
+            return User(
+                id=user_data[0], 
+                google_id=user_data[1], 
+                email=user_data[2], 
+                name=user_data[3], 
+                chess_com_username=user_data[4], 
+                created_at=user_data[5]
+            )
+        return None
+    except (psycopg2.Error, ValueError) as e:
+        print(f"Error loading user {user_id}: {e}")
+        return None
+    finally:
+        if cursor:
+            cursor.close()
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    return jsonify({"error": "Login required"}), 401
 
 
 # --- Google OAuth Setup ---
@@ -32,9 +114,8 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
 if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
-    print("Error: Google Client ID or Secret not found in environment variables.")
-    # Exit or raise error in a real app if critical
-    client_secrets = {} # Prevent further errors if credentials missing
+    print("Error: Google Client ID or Secret not found.")
+    client_secrets = {}
 else:
     client_secrets = {
         "web": {
@@ -42,221 +123,223 @@ else:
             "client_secret": GOOGLE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [
-                "http://localhost:5000/callback/google", # For local testing
-                # Add deployed URI later, e.g., "https://your-app.elasticbeanstalk.com/callback/google"
-                ],
-            "javascript_origins": [
-                "http://localhost:5173" # Your Vite frontend URL
-                # Add deployed frontend URL later
-                ]
+            "redirect_uris": ["http://localhost:5000/callback/google"],
+            "javascript_origins": ["http://localhost:5173"]
         }
     }
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
 
-# --- API Endpoint ---
-@app.route("/api/analyze", methods=['POST'])
-def analyze_games():
-    # Check if user info is in session
-    if not session.get('logged_in'):
-        return jsonify({"error": "Login required"}), 401
-
-    if not matches: # Check if import failed
-        return jsonify({"error": "Analysis module not loaded"}), 500
-
-    user_email = session.get('user_email', 'Unknown User')
-    print(f"Analyze request received for user: {user_email}")
-
-    data = request.json
-    username_from_request = data.get('username')
-    if not username_from_request:
-        return jsonify({"error": "Username is required in request body"}), 400
-
-    print(f"Analyzing games for username (from request): {username_from_request}")
-
-    try:
-        stockfish_path = os.environ.get("STOCKFISH_PATH")
-        if not stockfish_path:
-             print("Warning: STOCKFISH_PATH environment variable not set. Trying default 'stockfish'.")
-             # Use a path relative to main.py or an absolute path
-             # Adjust this default based on your stockfish location
-             stockfish_path = os.path.join(os.path.dirname(__file__), "stockfish", "stockfish-windows-x86-64-avx2.exe") # Example path
-             if not os.path.exists(stockfish_path):
-                 print(f"Error: Default stockfish path does not exist: {stockfish_path}")
-                 # Try a system-wide path if available
-                 stockfish_path = "stockfish"
-
-
-        # Fetch games
-        games_data = matches.get_player_matches(username_from_request, 2023, 1) # Example year/month
-        if not games_data or not games_data.get('games'):
-            return jsonify({"message": f"Could not fetch games for {username_from_request}. Check username and API availability."}), 404
-
-        # Parse the first game
-        first_game_pgn = games_data['games'][0].get('pgn')
-        game = matches.pgn_parse(first_game_pgn)
-        if not game:
-            return jsonify({"error": "Failed to parse the first game PGN."}), 500
-
-        # --- THIS IS THE FIX ---
-        # Call the correct function name and pass the engine path
-        results = matches.stockfish_analyze_game(game, stockfish_path)
-        # --- END OF FIX ---
-
-        if results is None:
-             # Function returns None if engine path invalid or analysis fails internally
-             return jsonify({"error": "Failed to analyze game with Stockfish. Check engine path and game validity. See server logs for details."}), 500
-
-        return jsonify(results)
-
-    except Exception as e:
-        print(f"Error during analysis for {username_from_request}: {e}")
-        traceback.print_exc()
-        return jsonify({"error": "An internal server error occurred during analysis."}), 500
-
 # --- Google Login Route ---
 @app.route('/login/google')
 def google_login():
-    if not client_secrets or not client_secrets["web"]["client_id"] or not client_secrets["web"]["client_secret"]:
-         return jsonify({"error": "Server configuration error: Google credentials missing or invalid"}), 500
-
-    try:
-        flow = Flow.from_client_config(
-            client_config=client_secrets,
-            scopes=SCOPES,
-            redirect_uri=url_for('google_callback', _external=True) # _external=True ensures absolute URL
-        )
-        authorization_url, state = flow.authorization_url(
-            access_type='offline',    # Request refresh token
-            include_granted_scopes='true', # Include scopes user previously granted
-            # prompt='consent' # Optional: Force consent screen every time
-        )
-        session['state'] = state # Store state in Flask session for CSRF check
-        print(f"Redirecting to Google: {authorization_url}")
-        return redirect(authorization_url)
-    except Exception as e:
-        print(f"Error creating Google Auth flow: {e}")
-        traceback.print_exc()
-        return jsonify({"error": "Server configuration error during Google login setup"}), 500
-
+    if not client_secrets:
+        return jsonify({"error": "Server configuration error: Google credentials missing"}), 500
+    flow = Flow.from_client_config(
+        client_config=client_secrets,
+        scopes=SCOPES,
+        redirect_uri=url_for('google_callback', _external=True)
+    )
+    authorization_url, state = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true'
+    )
+    session['state'] = state
+    return redirect(authorization_url) # <-- THIS IS THE FIX
 
 # --- Google Callback Route ---
 @app.route('/callback/google')
 def google_callback():
     state = session.get('state')
-    print(f"Callback received. State from session: {state}, State from Google: {request.args.get('state')}")
-
-    # CSRF Protection
     if not state or state != request.args.get('state'):
         print("Error: State mismatch.")
-        # Clear potentially compromised session state
-        session.pop('state', None)
         return redirect(f'http://localhost:5173/login?error=state_mismatch')
-
-    # Handle user denying access on Google's page
     if 'error' in request.args:
         print(f"User denied access: {request.args['error']}")
-        session.pop('state', None) # Clear state
         return redirect(f'http://localhost:5173/login?error=access_denied')
+    if not client_secrets:
+        print("Error: Server configuration error: Google credentials missing during callback.")
+        return redirect(f'http://localhost:5173/login?error=server_config')
 
-    # Check server config again
-    if not client_secrets or not client_secrets["web"]["client_id"] or not client_secrets["web"]["client_secret"]:
-         print("Error: Server configuration error: Google credentials missing during callback.")
-         session.pop('state', None) # Clear state
-         return redirect(f'http://localhost:5173/login?error=server_config')
+    flow = Flow.from_client_config(
+        client_config=client_secrets,
+        scopes=SCOPES,
+        state=state,
+        redirect_uri=url_for('google_callback', _external=True)
+    )
 
+    db_conn = None
+    cursor = None
     try:
-        flow = Flow.from_client_config(
-            client_config=client_secrets,
-            scopes=SCOPES,
-            state=state, # Pass state back for validation
-            redirect_uri=url_for('google_callback', _external=True)
-        )
-
-        # Exchange the authorization code for tokens
         authorization_response = request.url
-        # Fix for http vs https behind proxies if needed later:
-        # if not authorization_response.startswith('https://') and 'localhost' not in authorization_response:
-        #    authorization_response = 'https://' + authorization_response[len('http://'):]
-
         flow.fetch_token(authorization_response=authorization_response)
-        credentials = flow.credentials # Contains access_token, refresh_token, etc.
-        print("Successfully fetched tokens.")
-
-        # Get user info using the access token
+        credentials = flow.credentials
         userinfo_response = requests.get(
             'https://openidconnect.googleapis.com/v1/userinfo',
             headers={'Authorization': f'Bearer {credentials.token}'}
         )
-
-        userinfo_response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-
+        userinfo_response.raise_for_status()
         user_info = userinfo_response.json()
-        google_id = user_info.get('sub') # 'sub' is the standard field for unique ID
+
+        google_id = user_info.get('sub')
         email = user_info.get('email')
         name = user_info.get('name')
-
         if not google_id:
-             print("Error: 'sub' (Google ID) not found in user info response.")
-             raise ValueError("Google ID not found in user info")
+            raise ValueError("Google ID ('sub') not found in user info")
 
-        print(f"User Info from Google: ID={google_id}, Email={email}, Name={name}")
+        # --- Find or Create User in Database ---
+        db_conn = get_db()
+        cursor = db_conn.cursor()
 
-        # --- Store user info directly in the Flask session ---
-        session['google_id'] = google_id
-        session['user_name'] = name
-        session['user_email'] = email
-        session['logged_in'] = True # Set flag
+        cursor.execute("SELECT id, google_id, email, name, chess_com_username, created_at FROM users WHERE google_id = %s", (google_id,))
+        user_data = cursor.fetchone()
+        
+        user = None
+        if user_data:
+            print(f"Found existing user: {user_data[2]}")
+            cursor.execute("UPDATE users SET email = %s, name = %s WHERE google_id = %s", (email, name, google_id))
+            db_conn.commit()
+            user = User(
+                id=user_data[0], google_id=user_data[1], email=email, name=name, 
+                chess_com_username=user_data[4], created_at=user_data[5]
+            )
+        else:
+            print(f"Creating new user for Google ID: {google_id}")
+            cursor.execute(
+                "INSERT INTO users (google_id, email, name) VALUES (%s, %s, %s) RETURNING id, created_at",
+                (google_id, email, name)
+            )
+            new_user_id, new_created_at = cursor.fetchone()
+            db_conn.commit()
+            user = User(
+                id=new_user_id, google_id=google_id, email=email, name=name, 
+                chess_com_username=None, created_at=new_created_at
+            )
 
-        # State is no longer needed after successful token exchange
+        login_user(user, remember=True)
         session.pop('state', None)
+        return redirect('http://localhost:5173/dashboard') # <-- THIS IS THE FIX
 
-        print("User data stored in session. Redirecting to frontend dashboard.")
-        # Redirect to your frontend dashboard page
-        return redirect('http://localhost:5173/dashboard')
-
-    except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error fetching user info: {http_err}")
-        print(f"Response Body: {userinfo_response.text if 'userinfo_response' in locals() else 'N/A'}")
-        traceback.print_exc()
-        session.pop('state', None) # Clear state on error
-        return redirect(f'http://localhost:5173/login?error=userinfo_fetch_failed')
     except Exception as e:
+        if db_conn:
+            db_conn.rollback() 
         print(f"Error during Google callback processing: {e}")
         traceback.print_exc()
-        session.pop('state', None) # Clear state on error
         return redirect(f'http://localhost:5173/login?error=oauth_processing_failed')
+    finally:
+        if cursor:
+            cursor.close()
+
+# --- Endpoint: Link Chess.com Account ---
+@app.route('/api/user/link_chess_account', methods=['POST'])
+@login_required
+def link_chess_account():
+    data = request.json
+    chess_username = data.get('username')
+    if not chess_username:
+        return jsonify({"error": "Username is required"}), 400
+
+    db_conn = get_db()
+    cursor = None
+    try:
+        cursor = db_conn.cursor()
+        cursor.execute("UPDATE users SET chess_com_username = %s WHERE id = %s", (chess_username, current_user.id))
+        db_conn.commit()
+        
+        current_user.chess_com_username = chess_username
+        
+        return jsonify({"success": True, "message": "Account linked successfully", "username": chess_username}), 200 # <-- THIS IS THE FIX
+    except psycopg2.Error as e:
+        db_conn.rollback()
+        if e.pgcode == '23505':
+            return jsonify({"error": "That Chess.com username is already linked to another account."}), 409
+        print(f"Database error linking account: {e}")
+        return jsonify({"error": "Database error"}), 500
+    except Exception as e:
+        db_conn.rollback()
+        print(f"Error linking account: {e}")
+        return jsonify({"error": "An internal server error occurred"}), 500
+    finally:
+        if cursor:
+            cursor.close()
 
 # --- Login Status Check ---
 @app.route('/api/user/status')
 def user_status():
-    if session.get('logged_in'):
+    if current_user.is_authenticated:
         return jsonify({
             "logged_in": True,
             "user_info": {
-                "google_id": session.get('google_id'),
-                "name": session.get('user_name'),
-                "email": session.get('user_email')
+                "id": current_user.id,
+                "name": current_user.name,
+                "email": current_user.email,
+                "google_id": current_user.google_id,
+                "chess_com_username": current_user.chess_com_username 
             }
-        })
+        }) # <-- THIS IS THE FIX
     else:
-        return jsonify({"logged_in": False})
+        return jsonify({"logged_in": False}) # <-- THIS IS THE FIX
 
 # --- Logout Route ---
 @app.route('/logout')
+@login_required
 def logout():
-    session.clear() # Clear all data from the session
-    print("User logged out (session cleared).")
-    # Redirect back to the frontend homepage (or login page)
-    return redirect('http://localhost:5173/')
+    logout_user()
+    print("User logged out.")
+    return redirect('http://localhost:5173/') # <-- THIS IS THE FIX
 
+
+# --- *** NEW ANALYZE ENDPOINT *** ---
+@app.route("/api/analyze", methods=['POST'])
+@login_required
+def analyze_games():
+    if not matches or not analysis:
+        return jsonify({"error": "Analysis modules not loaded"}), 500
+
+    # 1. Get user info from the session
+    chess_username = current_user.chess_com_username
+    user_id = current_user.id
+    
+    if not chess_username:
+        return jsonify({"error": "No Chess.com account is linked."}), 400
+
+    print(f"--- Analysis Request Started for user {user_id} ({chess_username}) ---")
+
+    try:
+        # 2. Get request-local DB and Engine
+        db_conn = get_db()
+        engine = get_engine()
+
+        # 3. --- RUN STEP 1: INGEST ---
+        print(f"Running ingest for {chess_username}...")
+        # We'll hardcode the date for now.
+        matches.process_user_games(chess_username, 2025, 11, engine, db_conn)
+        print("Ingest complete.")
+
+        # 4. --- RUN STEP 2: ANALYZE ---
+        print(f"Running analysis pipeline for user {user_id}...")
+        analysis_results = analysis.main_analysis_pipeline(user_id, db_conn)
+        print("Analysis complete.")
+        
+        # 5. --- COMMIT TRANSACTION ---
+        db_conn.commit()
+        print("--- Analysis Request Finished Successfully ---")
+        
+        return jsonify({
+            "success": True, 
+            "message": "Analysis complete!",
+            "results": analysis_results
+        }), 200
+
+    except Exception as e:
+        db_conn = g.get('db', None)
+        if db_conn:
+            db_conn.rollback() 
+            
+        print(f"Error during analysis for {chess_username}: {e}")
+        traceback.print_exc()
+        return jsonify({"error": "An internal server error occurred during analysis."}), 500
+    
 
 # --- Run the server ---
 if __name__ == "__main__":
-    # Ensure OAUTHLIB_INSECURE_TRANSPORT is set for local HTTP testing
-    if os.environ.get("OAUTHLIB_INSECURE_TRANSPORT") != "1" and not os.environ.get("WERKZEUG_RUN_MAIN"):
-         print("\nWarning: Running locally over HTTP without OAUTHLIB_INSECURE_TRANSPORT=1 set.")
-         print("OAuth flow might fail. Set the environment variable if needed for testing.\n")
-
     app.run(port=5000, debug=True)
-

@@ -112,28 +112,60 @@ def create_database_and_tables():
         cur.execute(create_habits_table_sql)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_habits_user_id ON habits(user_id);")
 
-        # --- Create Mistakes Table ---
+        # --- Create Mistakes Table (NEW VERSION) ---
+        # First, drop the old table if it exists to ensure the new schema is applied
+        # CASCADE drops any dependent objects (like indexes) cleanly.
+        print("Dropping 'mistakes' table (if it exists) to apply new schema...")
+        cur.execute("DROP TABLE IF EXISTS mistakes CASCADE;")
+
+        # Now, create the new, detailed table
         create_mistakes_table_sql = """
-        CREATE TABLE IF NOT EXISTS mistakes (
+        CREATE TABLE mistakes (
             id SERIAL PRIMARY KEY,
             game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
             habit_id INTEGER NULL REFERENCES habits(id) ON DELETE SET NULL,
+            
+            -- Core Move Info
             move_number INTEGER NOT NULL,
             player_color VARCHAR(5) NOT NULL CHECK (player_color IN ('white', 'black')),
             prior_fen TEXT NOT NULL,
             move_made VARCHAR(10) NOT NULL,
-            mistake_type VARCHAR(100) NULL,
-            stockfish_eval_before VARCHAR(20) NULL,
-            stockfish_eval_after VARCHAR(20) NULL,
             best_move VARCHAR(10) NULL,
+
+            -- Stockfish Analysis (The "What")
+            cpl INTEGER NULL, -- Centipawn Loss (replaces eval_before/after)
+            mistake_type VARCHAR(50) NULL, -- e.g., 'Blunder', 'Mistake', 'Inaccuracy'
+            mistake_category VARCHAR(100) NULL, -- e.g., 'Hanging_Piece', 'Missed_Tactic', 'Positional_Error'
+
+            -- Feature Vector (The "Context" / "Why")
+            game_phase VARCHAR(50) NULL, -- 'Opening', 'Middlegame', 'Endgame'
+            material_balance VARCHAR(50) NULL, -- 'Winning', 'Equal', 'Losing'
+            board_complexity VARCHAR(50) NULL, -- 'Low', 'Medium', 'High'
+            
+            -- King Safety Context
+            king_self_safety VARCHAR(50) NULL, -- 'Safe', 'Exposed', 'In_Check'
+            king_opponent_status VARCHAR(50) NULL, -- 'Safe', 'Under_Attack'
+            castling_status_self VARCHAR(50) NULL, -- 'Has_Castled', 'Can_Castle', 'Cannot_Castle'
+            
+            -- Move/Piece Context
+            piece_moved VARCHAR(10) NULL, -- 'Queen', 'Rook', 'Pawn', etc.
+            move_type VARCHAR(50) NULL, -- 'Quiet', 'Capture', 'Check'
+            
+            -- Tactical Context (Booleans are efficient)
+            piece_was_attacked BOOLEAN NULL,
+            piece_was_defended BOOLEAN NULL,
+            piece_was_defending BOOLEAN NULL,
+            piece_was_pinned BOOLEAN NULL,
+
+            -- Timestamp
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
         """
-        print("Creating 'mistakes' table (if it doesn't exist)...")
+        print("Creating new 'mistakes' table...")
         cur.execute(create_mistakes_table_sql)
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mistakes_game_id ON mistakes(game_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_mistakes_habit_id ON mistakes(habit_id);")
-
+      
         # --- Create Feedback Table ---
         create_feedback_table_sql = """
         CREATE TABLE IF NOT EXISTS feedback (
