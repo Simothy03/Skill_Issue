@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
+const API_URL = import.meta.env.REACT_APP_API_URL || import.meta.env.VITE_REACT_APP_API_URL;
+
+const API = API_URL ? `${API_URL}` : "http://localhost:5000"; 
+
+
 export default function DashboardPage() {
   const [userInfo, setUserInfo] = useState(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -21,7 +26,7 @@ export default function DashboardPage() {
   const fetchUserStatus = async () => {
     try {
       // Fetch with credentials to send the session cookie
-      const response = await fetch('http://localhost:5000/api/user/status', {
+      const response = await fetch(`${API}/api/user/status`, {
         method: 'GET',
         credentials: 'include', // Important: sends cookies
       });
@@ -61,7 +66,7 @@ export default function DashboardPage() {
     }
 
     try {
-      const response = await fetch('http://localhost:5000/api/user/link_chess_account', {
+      const response = await fetch(`${API}/api/user/link_chess_account`, {
         method: 'POST',
         credentials: 'include', // Send cookies
         headers: {
@@ -93,7 +98,7 @@ export default function DashboardPage() {
     setError('');
 
     try {
-      const response = await fetch('http://localhost:5000/api/analyze', {
+      const response = await fetch(`${API}/api/analyze`, {
         method: 'POST',
         credentials: 'include', // Send cookies
         // No body is needed, backend uses the logged-in user's linked account
@@ -134,7 +139,7 @@ export default function DashboardPage() {
             Welcome, {userInfo?.name || 'User'}!
           </h1>
           <a
-            href="http://localhost:5000/logout"
+            href={`${API}\logout`}
             className="px-4 py-2 bg-red-600 text-white font-semibold rounded-md shadow-sm hover:bg-red-500"
           >
             Logout
