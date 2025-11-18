@@ -1,0 +1,15 @@
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - echo "Zipping root files (main.py, requirements.txt)..."
+      - zip -r backend-deploy.zip main.py requirements.txt
+
+      - echo "Adding contents of /backend folder..."
+      - cd backend
+      - zip -r ../backend-deploy.zip . 
+
+artifacts:
+  files:
+    - backend-deploy.zip
