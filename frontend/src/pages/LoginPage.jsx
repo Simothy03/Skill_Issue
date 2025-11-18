@@ -1,33 +1,37 @@
+import { Link } from 'react-router-dom'
+const API_URL = import.meta.env.REACT_APP_API_URL || import.meta.env.VITE_REACT_APP_API_URL;
+
+const LOGIN_URL = API_URL ? `${API_URL}/login/google` : "http://localhost:5000/login/google"; 
+
+
+
 export default function LoginPage() {
   return (
     <>
       <div className="flex min-h-full flex-col justify-center bg-gray-50 py-12 sm:px-6 lg:px-8">
         <div className="sm:mx-auto sm:w-full sm:max-w-md">
           <img
-            alt="Your Company"
-            src="https://tailwindcss.com/plus-assets/img/logos/mark.svg?color=indigo&shade=600"
-            className="mx-auto h-10 w-auto"
-          />
+                  src="/images/Skill_Issue_Logo_Abbr.png"
+                  alt="Skill Issue Logo Abbr"
+                  className="mx-auto h-auto w-32"
+                />
           <h2 className="mt-6 text-center text-2xl/9 font-bold tracking-tight text-gray-900">
             Sign in to your account
           </h2>
-        </div>
+        </div> 
 
         <div className="mt-10 sm:mx-auto sm:w-full sm:max-w-[480px]">
           <div className="bg-white px-6 py-12 shadow sm:rounded-lg sm:px-12">
-            {/* Removed the original email/password form */}
-
             <div>
-              <div className="mt-2 flex items-center gap-x-6"> {/* Adjusted margin */}
+              <div className="mt-2 flex items-center gap-x-6">
                 <div className="w-full flex-1 border-t border-gray-200" />
                 <p className="text-nowrap text-sm/6 font-medium text-gray-900">Continue with</p>
                 <div className="w-full flex-1 border-t border-gray-200" />
               </div>
 
               <div className="mt-6 grid grid-cols-1 gap-4"> {/* Changed to grid-cols-1 */}
-                {/* --- THIS IS THE IMPORTANT CHANGE --- */}
                 <a
-                  href="http://localhost:5000/login/google" // Direct link to backend
+                  href={LOGIN_URL} // Direct link to backend
                   className="flex w-full items-center justify-center gap-3 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 focus-visible:ring-transparent"
                 >
                   <svg viewBox="0 0 24 24" aria-hidden="true" className="h-5 w-5">
@@ -50,11 +54,19 @@ export default function LoginPage() {
                   </svg>
                   <span className="text-sm/6 font-semibold">Google</span>
                 </a>
-                {/* Removed GitHub button */}
               </div>
             </div>
+            <div className="mt-10 text-center">
+            <p className="text-sm text-gray-500">
+              <Link
+                to="/"
+                className="font-semibold leading-6 text-indigo-600 hover:text-indigo-500"
+              >
+                &larr; Return to home
+              </Link>
+            </p>
           </div>
-          {/* Removed "Not a member?" link */}
+          </div>
         </div>
       </div>
     </>
