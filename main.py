@@ -23,6 +23,14 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app, supports_credentials=True)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY')
+
+server_name = os.environ.get('SERVER_NAME')
+if server_name:
+    app.config['SERVER_NAME'] = server_name
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['REMEMBER_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+
 DATABASE_URL = os.environ.get('DATABASE_URL')
 STOCKFISH_PATH = os.environ.get('STOCKFISH_PATH')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
@@ -132,38 +140,41 @@ SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://w
 def google_login():
     if not client_secrets:
         return jsonify({"error": "Server configuration error: Google credentials missing"}), 500
-    flow = Flow.from_client_config(
-        client_config=client_secrets,
-        scopes=SCOPES,
-        redirect_uri=url_for('google_callback', _external=True)
-    )
+    
+    with app.app_context(): 
+        flow = Flow.from_client_config(
+            client_config=client_secrets,
+            scopes=SCOPES,
+            redirect_uri=url_for('google_callback', _external=True, _scheme='https') 
+        )
+    
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true'
     )
     session['state'] = state
-    return redirect(authorization_url) # <-- THIS IS THE FIX
+    return redirect(authorization_url)
 
 # --- Google Callback Route ---
 @app.route('/callback/google')
 def google_callback():
-    state = session.get('state')
-    if not state or state != request.args.get('state'):
-        print("Error: State mismatch.")
-        return redirect(f'{FRONTEND_URL}/login?error=state_mismatch')
-    if 'error' in request.args:
-        print(f"User denied access: {request.args['error']}")
-        return redirect(f'{FRONTEND_URL}/login?error=access_denied')
     if not client_secrets:
         print("Error: Server configuration error: Google credentials missing during callback.")
         return redirect(f'{FRONTEND_URL}/login?error=server_config')
+    
+    state = session.get('state')
+    
+    if not state:
+        print("Error: Missing state parameter in session during callback.")
+        return redirect(f'{FRONTEND_URL}/login?error=state_missing')
 
-    flow = Flow.from_client_config(
-        client_config=client_secrets,
-        scopes=SCOPES,
-        state=state,
-        redirect_uri=url_for('google_callback', _external=True)
-    )
+    with app.app_context():
+        flow = Flow.from_client_config(
+            client_config=client_secrets,
+            scopes=SCOPES,
+            state=state,
+            redirect_uri=url_for('google_callback', _external=True, _scheme='https')
+        )
 
     db_conn = None
     cursor = None
@@ -311,12 +322,10 @@ def analyze_games():
         matches.process_user_games(chess_username, 2025, 11, engine, db_conn)
         print("Ingest complete.")
 
-        # 4. --- RUN STEP 2: ANALYZE ---
         print(f"Running analysis pipeline for user {user_id}...")
         analysis_results = analysis.main_analysis_pipeline(user_id, db_conn)
         print("Analysis complete.")
         
-        # 5. --- COMMIT TRANSACTION ---
         db_conn.commit()
         print("--- Analysis Request Finished Successfully ---")
         
