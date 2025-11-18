@@ -8,16 +8,13 @@ from google_auth_oauthlib.flow import Flow
 import requests
 import json
 import traceback
-import chess.engine # <-- Import chess engine
+import chess.engine
 
-# Import your functions from the backend module
 try:
     from backend import matches
-    from backend import analysis # <-- Import the new analysis module
+    from backend import analysis
 except ImportError as e:
     print(f"Error importing from 'backend' module: {e}")
-    # This is often a relative import issue. Try 'from . import matches'
-    # in your __init__.py or adjust your PYTHONPATH
     matches = None
     analysis = None
 
@@ -124,7 +121,7 @@ else:
             "client_secret": GOOGLE_CLIENT_SECRET,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://localhost:5000/callback/google"],
+            # "redirect_uris": ["http://localhost:5000/callback/google"],
             "javascript_origins": [FRONTEND_URL]
         }
     }
@@ -218,7 +215,7 @@ def google_callback():
 
         login_user(user, remember=True)
         session.pop('state', None)
-        return redirect(f'{FRONTEND_URL}/dashboard') # <-- THIS IS THE FIX
+        return redirect(f'{FRONTEND_URL}/dashboard')
 
     except Exception as e:
         if db_conn:
@@ -248,7 +245,7 @@ def link_chess_account():
         
         current_user.chess_com_username = chess_username
         
-        return jsonify({"success": True, "message": "Account linked successfully", "username": chess_username}), 200 # <-- THIS IS THE FIX
+        return jsonify({"success": True, "message": "Account linked successfully", "username": chess_username}), 200
     except psycopg2.Error as e:
         db_conn.rollback()
         if e.pgcode == '23505':
@@ -276,9 +273,9 @@ def user_status():
                 "google_id": current_user.google_id,
                 "chess_com_username": current_user.chess_com_username 
             }
-        }) # <-- THIS IS THE FIX
+        }) 
     else:
-        return jsonify({"logged_in": False}) # <-- THIS IS THE FIX
+        return jsonify({"logged_in": False})
 
 # --- Logout Route ---
 @app.route('/logout')
@@ -286,7 +283,7 @@ def user_status():
 def logout():
     logout_user()
     print("User logged out.")
-    return redirect(FRONTEND_URL) # <-- THIS IS THE FIX
+    return redirect(FRONTEND_URL)
 
 
 # --- *** NEW ANALYZE ENDPOINT *** ---
@@ -306,13 +303,11 @@ def analyze_games():
     print(f"--- Analysis Request Started for user {user_id} ({chess_username}) ---")
 
     try:
-        # 2. Get request-local DB and Engine
         db_conn = get_db()
         engine = get_engine()
 
-        # 3. --- RUN STEP 1: INGEST ---
         print(f"Running ingest for {chess_username}...")
-        # We'll hardcode the date for now.
+        # November 2025 for now
         matches.process_user_games(chess_username, 2025, 11, engine, db_conn)
         print("Ingest complete.")
 
