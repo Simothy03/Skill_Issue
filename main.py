@@ -27,7 +27,8 @@ app = Flask(__name__)
 CORS(app, supports_credentials=True)
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY')
 DATABASE_URL = os.environ.get('DATABASE_URL')
-STOCKFISH_PATH = os.environ.get('STOCKFISH_PATH') # <-- Get Stockfish path
+STOCKFISH_PATH = os.environ.get('STOCKFISH_PATH')
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 
 if not app.config['SECRET_KEY'] or not DATABASE_URL or not STOCKFISH_PATH:
     print("Error: FLASK_SECRET_KEY, DATABASE_URL, or STOCKFISH_PATH not found.")
@@ -124,7 +125,7 @@ else:
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": ["http://localhost:5000/callback/google"],
-            "javascript_origins": ["http://localhost:5173"]
+            "javascript_origins": [FRONTEND_URL]
         }
     }
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile']
@@ -152,13 +153,13 @@ def google_callback():
     state = session.get('state')
     if not state or state != request.args.get('state'):
         print("Error: State mismatch.")
-        return redirect(f'http://localhost:5173/login?error=state_mismatch')
+        return redirect(f'{FRONTEND_URL}/login?error=state_mismatch')
     if 'error' in request.args:
         print(f"User denied access: {request.args['error']}")
-        return redirect(f'http://localhost:5173/login?error=access_denied')
+        return redirect(f'{FRONTEND_URL}/login?error=access_denied')
     if not client_secrets:
         print("Error: Server configuration error: Google credentials missing during callback.")
-        return redirect(f'http://localhost:5173/login?error=server_config')
+        return redirect(f'{FRONTEND_URL}/login?error=server_config')
 
     flow = Flow.from_client_config(
         client_config=client_secrets,
@@ -217,14 +218,14 @@ def google_callback():
 
         login_user(user, remember=True)
         session.pop('state', None)
-        return redirect('http://localhost:5173/dashboard') # <-- THIS IS THE FIX
+        return redirect(f'{FRONTEND_URL}/dashboard') # <-- THIS IS THE FIX
 
     except Exception as e:
         if db_conn:
             db_conn.rollback() 
         print(f"Error during Google callback processing: {e}")
         traceback.print_exc()
-        return redirect(f'http://localhost:5173/login?error=oauth_processing_failed')
+        return redirect(f'{FRONTEND_URL}/login?error=oauth_processing_failed')
     finally:
         if cursor:
             cursor.close()
@@ -285,7 +286,7 @@ def user_status():
 def logout():
     logout_user()
     print("User logged out.")
-    return redirect('http://localhost:5173/') # <-- THIS IS THE FIX
+    return redirect(FRONTEND_URL) # <-- THIS IS THE FIX
 
 
 # --- *** NEW ANALYZE ENDPOINT *** ---
