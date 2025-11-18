@@ -146,7 +146,7 @@ def google_login():
         flow = Flow.from_client_config(
             client_config=client_secrets,
             scopes=SCOPES,
-            redirect_uri=url_for('google_callback', _external=True, _scheme='https') 
+            redirect_uri=f"{BACKEND_URL}/callback/google"
         )
     
     authorization_url, state = flow.authorization_url(
@@ -175,7 +175,7 @@ def google_callback():
             client_config=client_secrets,
             scopes=SCOPES,
             state=state,
-            redirect_uri=url_for('google_callback', _external=True, _scheme='https')
+            redirect_uri=f"{BACKEND_URL}/callback/google"
         )
 
     db_conn = None
