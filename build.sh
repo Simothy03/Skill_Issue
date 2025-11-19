@@ -1,20 +1,22 @@
+# Created by Google Gemini
 #!/usr/bin/env bash
 # Exit on error
 set -o errexit
 
 pip install -r requirements.txt
 
-echo "Downloading Stockfish 17.1..."
-curl -L -o stockfish.tar https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar
+echo "Cloning Stockfish source..."
+git clone --depth 1 https://github.com/official-stockfish/Stockfish.git stockfish-source
 
-echo "Extracting Stockfish..."
-tar -xf stockfish.tar
+echo "Compiling Stockfish..."
+cd stockfish-source/src
+make -j profile-build ARCH=x86-64-avx2 COMP=gcc
 
-echo "Moving executable..."
-find . -type f -name 'stockfish-ubuntu-x86-64-avx2' -exec mv {} ./stockfish \;
+echo "Copying compiled binary and cleaning up..."
+cp ./stockfish ../../stockfish-binary 
 
-rm stockfish.tar
-rm -rf stockfish-ubuntu-x86-64-avx2
+cd ../.. # Back to root
+rm -rf stockfish-source
 
-chmod +x ./stockfish
-echo "Stockfish binary is ready."
+chmod +x ./stockfish-binary
+echo "Stockfish binary is now installed at ./stockfish-binary"
