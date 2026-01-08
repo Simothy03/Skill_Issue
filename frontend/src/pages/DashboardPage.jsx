@@ -141,12 +141,37 @@ export default function DashboardPage() {
   }
 };
 
+  const fetchSavedHabits = async () => {
+    try {
+        const response = await fetch(`${API}/api/user/latest-habits`, {
+            method: 'GET',
+            credentials: 'include',
+        });
+        const data = await response.json();
+        if (response.ok && data.habits && data.habits.length > 0) {
+            // This populates the UI with the previous analysis automatically
+            setAnalysisResults({ habits: data.habits });
+        }
+    } catch (err) {
+        console.error("Could not restore session habits", err);
+    }
+  };
+
   // Fetch user status on component load
   useEffect(() => {
-    fetchUserStatus();
-  }, [navigate]); // Add navigate as a dependency
+    const init = async () => {
+        await fetchUserStatus(); // Get user info first
+    };
+    init();
+}, [navigate]);
 
-  // Handler for the "Link Account" form (no change needed here)
+  useEffect(() => {
+    if (isLoggedIn && userInfo?.chess_com_username) {
+        fetchSavedHabits();
+    }
+}, [isLoggedIn, userInfo]);
+
+  // Handler for the "Link Account" form
   const handleLinkAccount = async (e) => {
     e.preventDefault();
     setLinkMessage(''); // Clear previous messages
@@ -189,7 +214,7 @@ export default function DashboardPage() {
         return;
     }
 
-    setAnalysisResults(null);
+    // setAnalysisResults(null);
     setAnalysisLoading(true);
     setError('');
 
@@ -337,7 +362,7 @@ export default function DashboardPage() {
               {analysisLoading ? 'Analyzing...' : 'Analyze Selected Games'}
             </button>
             <p className="text-sm text-gray-500 mt-2">
-              Want to analyze a different account? You can change your linked account on your Profile page (coming soon).
+              Want to analyze a different account? You can change your linked account on the Settings page.
             </p>
           </div>
         )}
@@ -350,19 +375,23 @@ export default function DashboardPage() {
           </div>
         )}
         
-        {analysisLoading && (
-            <div className="mt-6 flex justify-center items-center p-8 border border-gray-300 rounded-md">
-                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                <p className="text-lg font-medium text-indigo-700">Analyzing a lot of games. This may take a few minutes...</p>
+        {/* Show results if they exist, even if we are currently loading NEW ones */}
+        {analysisResults && (
+            <div className={analysisLoading ? "opacity-50 pointer-events-none" : ""}>
+                {analysisLoading && (
+                    <p className="text-indigo-600 font-bold animate-pulse mb-2">
+                        Please do not leave this screen. Updating your habits with new games. This may take a few minutes...
+                    </p>
+                )}
+                <HabitsDisplay analysisResults={analysisResults} />
             </div>
         )}
-        
-        {analysisResults && !analysisLoading && (
-            // Call the new component to render structured habits
-            <HabitsDisplay analysisResults={analysisResults} />
+
+        {/* Keep your existing big loading spinner for when there is NO data at all */}
+        {analysisLoading && !analysisResults && (
+            <div className="mt-6 flex justify-center items-center p-8 border border-gray-300 rounded-md">
+                <p>Please do not leave this screen. Analyzing for the first time. This may take a few minutes...</p>
+            </div>
         )}
         
       </div>

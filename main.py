@@ -447,7 +447,46 @@ def update_user_options():
     finally:
         if cursor:
             cursor.close()
+
+@app.route('/api/user/latest-habits', methods=['GET'])
+@login_required
+def get_latest_habits():
+    user_id = current_user.id
+    db_conn = get_db()
+    try:
+        with db_conn.cursor() as cur:
+            # This calls the function you already wrote in db_helpers.py
+            habits = analysis.db_helpers.get_all_habits_for_user(cur, user_id)
+        
+        return jsonify({
+            "success": True,
+            "habits": habits
+        }), 200
+    except Exception as e:
+        print(f"Error fetching habits: {e}")
+        return jsonify({"error": "Failed to load saved habits"}), 500
     
+@app.route('/api/user/delete', methods=['DELETE'])
+@login_required
+def delete_account():
+    user_id = current_user.id
+    db_conn = get_db()
+    cursor = None
+    try:
+        cursor = db_conn.cursor()
+        # The DELETE will cascade to habits/mistakes if your DB schema is set up with ON DELETE CASCADE
+        cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        db_conn.commit()
+        
+        logout_user() # Clear the session
+        return jsonify({"success": True, "message": "Account deleted permanently."}), 200
+    except Exception as e:
+        db_conn.rollback()
+        print(f"Error deleting account: {e}")
+        return jsonify({"error": "Failed to delete account."}), 500
+    finally:
+        if cursor:
+            cursor.close()
 
 # --- Run the server ---
 if __name__ == "__main__":

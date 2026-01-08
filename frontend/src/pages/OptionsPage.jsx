@@ -82,6 +82,70 @@ export default function OptionsPage() {
   
   // --- END: Data Fetching Logic and Editable State ---
 
+  const handleUpdateOptions = async (e) => {
+    e.preventDefault(); // Prevent page reload
+    setError('');
+    
+    try {
+      const response = await fetch(`${API}/api/user/update_options`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: editableName,
+          chess_com_username: editableChessUsername,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to update settings');
+      }
+
+      // Success! Update the userInfo state so other parts of the UI refresh
+      setUserInfo(prev => ({
+        ...prev,
+        name: editableName,
+        chess_com_username: editableChessUsername
+      }));
+      
+      alert('Settings saved successfully!');
+
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleDeleteAccount = async (e) => {
+    e.preventDefault();
+    
+    const confirmed = window.confirm(
+        "Are you absolutely sure? This will permanently delete your account and all analyzed chess data. This cannot be undone."
+    );
+
+    if (!confirmed) return;
+
+    try {
+        const response = await fetch(`${API}/api/user/delete`, {
+            method: 'DELETE',
+            credentials: 'include',
+        });
+
+        if (response.ok) {
+            // Redirect to home or login page after deletion
+            window.location.href = '/'; 
+        } else {
+            const data = await response.json();
+            setError(data.error || 'Failed to delete account');
+        }
+    } catch (err) {
+        setError('An error occurred during account deletion.');
+    }
+  };
+
   return (
     <Sidebar>
     <>
@@ -124,12 +188,10 @@ export default function OptionsPage() {
             <div className="divide-y divide-gray-200">
               <div className="grid max-w-7xl grid-cols-1 gap-x-8 gap-y-10 px-4 py-16 sm:px-6 md:grid-cols-3 lg:px-8">
                 <div>
-                  <h2 className="text-base/7 font-semibold text-gray-900">Personal Information</h2>
-                  <p className="mt-1 text-sm/6 text-gray-500">You may change your linked Chess.com account up to once every month.</p>
-                </div>
+                  <h2 className="text-base/7 font-semibold text-gray-900">Personal Information</h2>                </div>
 
                 {/* The main form for editing personal info */}
-                <form className="md:col-span-2">
+                <form onSubmit={handleUpdateOptions} className="md:col-span-2">
                   <div className="grid grid-cols-1 gap-x-6 gap-y-8 sm:max-w-xl sm:grid-cols-6">
 
                     {/* 1. Name Field (Now Editable) */}
@@ -217,6 +279,7 @@ export default function OptionsPage() {
                 <form className="flex items-start md:col-span-2">
                   <button
                     type="submit"
+                    onClick={handleDeleteAccount}
                     className="rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500"
                   >
                     Yes, delete my account
