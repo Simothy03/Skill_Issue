@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar'
+import { useRef } from "react";
 
 const API_URL = import.meta.env.REACT_APP_API_URL || import.meta.env.VITE_REACT_APP_API_URL;
 
@@ -32,6 +33,66 @@ const getMonthYearOptions = (count = 24) => {
 
 const monthYearOptions = getMonthYearOptions();
 
+const HabitsDisplay = ({ analysisResults }) => {
+    // Check for required data structure
+    if (!analysisResults || !analysisResults.habits || analysisResults.habits.length === 0) {
+        return (
+            <div className="mt-6 p-4 bg-yellow-50 text-yellow-800 border-l-4 border-yellow-400 rounded-md">
+                <p className="font-medium">No distinct habits found in the selected time range.</p>
+                <p className="text-sm mt-1">Try analyzing more games or a longer date range.</p>
+            </div>
+        );
+    }
+
+    return (
+      <div className="mt-6 space-y-8">
+          <h2 className="text-3xl font-bold text-gray-900 border-b pb-2">Your Chess Habits</h2>
+          
+          {analysisResults.habits.map((habit, index) => (
+              <div key={index} className="p-6 bg-white border border-indigo-200 rounded-xl shadow-lg">
+                  <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-xl font-extrabold text-indigo-700">
+                          {index + 1}. {habit.habit_name.replace(` (H${habit.hdbscan_cluster_id})`, '')}
+                      </h3>
+                      <span className="text-sm font-semibold text-gray-500 bg-indigo-50 px-3 py-1 rounded-full">
+                          {/* Use a placeholder since confidence is NULL */}
+                          Confidence: {habit.confidence ? Math.round(habit.confidence * 100) : 'N/A'}
+                      </span>
+                  </div>
+
+                  {/* Coaching Insight (Mapping to the combined feedback_text) */}
+                  <div className="mt-4 p-4 bg-indigo-50 border-l-4 border-indigo-400 rounded-md">
+                      <p className="font-semibold text-indigo-800">Coaching Insight:</p>
+                      {/* CHANGE: Use the feedback_text field, which is aliased from f.description */}
+                      <p className="text-gray-700 mt-1">{habit.feedback_text || habit.habit_description || 'No detailed coaching insight found.'}</p>
+                  </div>
+
+                  {/* Improvement Tip (Mapping to the combined feedback_text as well, or a placeholder) */}
+                  <div className="mt-4 p-4 bg-green-50 border-l-4 border-green-400 rounded-md">
+                      <p className="font-semibold text-green-800">Improvement Tip:</p>
+                      {/* CHANGE: Use the same field, since the Tip field is not dedicated */}
+                      <p className="text-gray-700 mt-1">
+                          {habit.improvement_tip || (habit.feedback_text ? habit.feedback_text.split('.')[0] + '.' : 'No specific tip provided. See insight above.')}
+                      </p>
+                  </div>
+                  
+                  {/* Key Details (Optional, for debugging or advanced users) */}
+                  <details className="mt-4 text-sm text-gray-600 cursor-pointer">
+                      <summary className="font-medium text-gray-700 hover:text-indigo-600">
+                          Advanced Details ({habit.total_mistakes} Mistakes)
+                      </summary>
+                      <ul className="mt-2 list-disc list-inside space-y-1 bg-gray-50 p-3 rounded-md">
+                          <li>Number of Mistakes Clustered: {habit.total_mistakes}</li>
+                          {/* Fallback for missing fields */}
+                          <li>"Prime" Example of a Mistake (ID): {habit.prime_example_mistake_id || 'N/A'}</li> 
+                          <li>Cluster ID (HDBScan): {habit.hdbscan_cluster_id ?? 'N/A'}</li> 
+                      </ul>
+                  </details>
+              </div>
+          ))}
+      </div>
+  );
+};
 
 export default function DashboardPage() {
   const [userInfo, setUserInfo] = useState(null);
@@ -43,7 +104,7 @@ export default function DashboardPage() {
   const [linkUsername, setLinkUsername] = useState('');
   const [linkMessage, setLinkMessage] = useState('');
 
-  // ⭐️ NEW: State for the date range
+  // State for the date range
   const [startMonthYear, setStartMonthYear] = useState(monthYearOptions[monthYearOptions.length - 6] || ''); // Default to 6 months ago
   const [endMonthYear, setEndMonthYear] = useState(monthYearOptions[monthYearOptions.length - 1] || '');   // Default to the most recent month
 
@@ -53,34 +114,32 @@ export default function DashboardPage() {
   
   const navigate = useNavigate();
 
+  const hasFetched = useRef(false);
+
   // Function to fetch user status (we'll call this on load and after linking)
   const fetchUserStatus = async () => {
-    try {
-      // Fetch with credentials to send the session cookie
-      const response = await fetch(`${API}/api/user/status`, {
-        method: 'GET',
-        credentials: 'include', // Important: sends cookies
-      });
-      
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
-      }
+  try {
+    const response = await fetch(`${API}/api/user/status`, {
+      method: 'GET',
+      credentials: 'include',
+    });
 
-      const data = await response.json();
-      if (data.logged_in) {
-        setIsLoggedIn(true);
-        setUserInfo(data.user_info);
-      } else {
-        setIsLoggedIn(false);
-        navigate('/login?error=session_expired'); // Redirect if not logged in
-      }
-    } catch (err) {
-      setError('Failed to fetch user status. Please try refreshing.');
-      setIsLoggedIn(false);
-    } finally {
-      setLoading(false);
+    const data = await response.json();
+
+    if (data.logged_in) {
+      setIsLoggedIn(true);
+      setUserInfo(data.user_info);
+    } else {
+      navigate('/login?error=session_expired');
     }
-  };
+
+  } catch (err) {
+    setError('Failed to fetch user status.');
+  } finally {
+    setLoading(false);
+    hasFetched.current = true;
+  }
+};
 
   // Fetch user status on component load
   useEffect(() => {
@@ -124,7 +183,7 @@ export default function DashboardPage() {
 
   // Handler for the "Analyze" button
   const handleAnalyze = async () => {
-    // ⭐️ NEW: Date validation
+    // Date validation
     if (startMonthYear > endMonthYear) {
         setError('Start date cannot be after the end date.');
         return;
@@ -141,7 +200,7 @@ export default function DashboardPage() {
         headers: {
             'Content-Type': 'application/json',
         },
-        // ⭐️ NEW: Send the date range in the request body
+        // Send the date range in the request body
         body: JSON.stringify({ 
             start_month_year: startMonthYear, 
             end_month_year: endMonthYear 
@@ -163,7 +222,7 @@ export default function DashboardPage() {
   };
 
   // Show loading spinner while checking auth
-  if (loading) {
+  if (loading && !hasFetched.current) {
     return <div className="min-h-screen bg-gray-100 flex items-center justify-center"><p>Loading...</p></div>;
   }
   
@@ -231,7 +290,6 @@ export default function DashboardPage() {
               Your linked Chess.com account: <strong className="text-gray-900">{userInfo.chess_com_username}</strong>
             </p>
             
-            {/* ⭐️ NEW: Date Range Selectors */}
             <div className="mb-4 p-4 border border-gray-200 rounded-md">
                 <h3 className="text-lg font-medium mb-3">Select Game Date Range</h3>
                 <div className="flex space-x-4">
@@ -292,17 +350,23 @@ export default function DashboardPage() {
           </div>
         )}
         
-        {analysisResults && (
-          <div className="mt-6">
-            <h2 className="text-2xl font-semibold mb-4">Analysis Results</h2>
-            <pre className="bg-gray-900 text-white p-4 rounded-md overflow-x-auto">
-              {JSON.stringify(analysisResults, null, 2)}
-            </pre>
-          </div>
+        {analysisLoading && (
+            <div className="mt-6 flex justify-center items-center p-8 border border-gray-300 rounded-md">
+                <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p className="text-lg font-medium text-indigo-700">Analyzing a lot of games. This may take a few minutes...</p>
+            </div>
         )}
-
+        
+        {analysisResults && !analysisLoading && (
+            // Call the new component to render structured habits
+            <HabitsDisplay analysisResults={analysisResults} />
+        )}
+        
       </div>
     </div>
-    </Sidebar>
+  </Sidebar>
   );
 }

@@ -278,13 +278,31 @@ def get_board_complexity(board):
     return "Medium"
 
 def get_castling_status(board, color):
-    # This is a heuristic.
-    # Check if king has moved (via FEN or tracking) is more robust
+    """
+    Returns the exact castling status: Has_Castled, Can_Castle, or Cannot_Castle.
+    """
+    # 1. Check if they HAVE CASTLED
+    # We check if the king is on a traditional castled square 
+    # AND that all castling rights for that player are gone.
+    king_square = board.king(color)
+    if color == chess.WHITE:
+        castled_squares = [chess.G1, chess.C1]
+    else:
+        castled_squares = [chess.G8, chess.C8]
+
+    # If King is on a castled square and rights are gone, they have castled.
+    if king_square in castled_squares and not board.has_castling_rights(color):
+        return "Has_Castled"
+
+    # 2. Check if they CAN CASTLE
+    # This checks the FEN/internal state to see if rights still exist.
     if board.has_castling_rights(color):
         return "Can_Castle"
-    if board.fullmove_number < 15:
-        return "Cannot_Castle"
-    return "Has_Castled" # Assumed if late in game and rights are gone
+
+    # 3. Otherwise, they CANNOT CASTLE
+    # This covers cases where the king is stuck in the center or 
+    # rights were lost due to moving the king/rooks.
+    return "Cannot_Castle"
 
 def get_move_type(board, move):
     if board.is_capture(move): return "Capture"

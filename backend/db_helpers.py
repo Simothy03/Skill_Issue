@@ -3,8 +3,6 @@ from psycopg2.extras import execute_values, RealDictCursor
 from datetime import datetime
 import json
 
-# --- FUNCTIONS FOR matches.py (Ingestion) ---
-
 def get_user_by_username(cur, username):
     try:
         cur.execute("SELECT id FROM users WHERE chess_com_username = %s", (username,))
@@ -62,8 +60,6 @@ def batch_insert_mistakes(cur, mistakes_list_of_dicts):
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error batch-inserting mistakes: {error}")
 
-# --- FUNCTIONS FOR analysis.py (v9 Pipeline) ---
-
 def clear_old_habits_and_feedback(cur, user_id):
     """
     Deletes all existing habits and feedback for a user before
@@ -72,7 +68,7 @@ def clear_old_habits_and_feedback(cur, user_id):
     try:
         print(f"Clearing old analysis data for user {user_id}...")
         
-        # 1. Unlink all mistakes from habits
+        # unlink all mistakes from habits
         cur.execute(
             """
             UPDATE mistakes SET habit_id = NULL 
@@ -81,12 +77,11 @@ def clear_old_habits_and_feedback(cur, user_id):
             (user_id,)
         )
         
-        # 2. Deleting from 'habits' will CASCADE and delete from 'feedback'
         cur.execute("DELETE FROM habits WHERE user_id = %s", (user_id,))
         print("Old analysis cleared.")
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error clearing old habits: {error}")
-        raise # Raise the error to stop the transaction
+        raise
 
 def get_all_mistakes_for_user_v6(cur, user_id):
     """
@@ -139,33 +134,120 @@ def link_mistakes_to_habit(cur, new_serial_habit_id, list_of_mistake_ids):
         print(f"Error linking mistakes to habit: {error}")
         # This will rollback the transaction in main_analysis_pipeline
 
-def save_habit_analysis(cur, user_id, hdbscan_cluster_id, habit_name, triggers, confidence, prime_example_id, feedback_text):
+def save_habit_analysis(cur, user_id, hdbscan_cluster_id, habit_name, triggers, confidence, prime_example_id, feedback_text, improvement_tip):
     """
     Saves the results of the analysis to the 'habits' and 'feedback' tables.
     Returns the new 'habit' table ID (the serial key).
     """
     try:
-        # --- 1. Save to 'habits' table ---
+        # Assuming int/float conversions are already handled:
+        hdbscan_cluster_id_int = int(hdbscan_cluster_id)
+        prime_example_id_int = int(prime_example_id)
+        confidence_float = float(confidence) # Must convert numpy float to standard float
+        
+        # 1. --- Save ML/Clustering Data to 'habits' table ---
         habit_sql = """
-        INSERT INTO habits (user_id, habit_name, description)
-        VALUES (%s, %s, %s)
+        INSERT INTO habits 
+            (user_id, habit_name, description, cluster_id, confidence, triggers_json, prime_example_mistake_id)
+        VALUES 
+            (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (user_id, habit_name) DO NOTHING
         RETURNING id;
         """
-        description = f"HDBSCAN Cluster {hdbscan_cluster_id} ({confidence * 100:.0f}% confidence)"
-        cur.execute(habit_sql, (user_id, habit_name, description))
-        new_serial_habit_id = cur.fetchone()[0]
-
-        # --- 2. Save to 'feedback' table ---
-        feedback_sql = """
-        INSERT INTO feedback (habit_id, feedback_text, triggers_json, prime_example_mistake_id)
-        VALUES (%s, %s, %s, %s)
-        """
+        description = f"HDBSCAN Cluster {hdbscan_cluster_id_int} ({confidence_float * 100:.0f}% confidence)"
         triggers_json = json.dumps(triggers)
-        cur.execute(feedback_sql, (new_serial_habit_id, feedback_text, triggers_json, prime_example_id))
+        
+        cur.execute(habit_sql, (
+            user_id, habit_name, description, 
+            hdbscan_cluster_id_int, confidence_float, triggers_json, prime_example_id_int
+        ))
+        
+        habit_id_row = cur.fetchone()
+        if not habit_id_row:
+             print(f"Habit '{habit_name}' already exists in DB. Skipping analysis save.")
+             return None
+             
+        new_serial_habit_id = habit_id_row[0]
+
+        # 2. --- Save LLM Feedback to 'feedback' table ---
+        feedback_sql = """
+        INSERT INTO feedback 
+            (habit_id, feedback_text, coaching_feedback, improvement_tip)
+        VALUES 
+            (%s, %s, %s, %s);  -- 4 placeholders
+        """
+        
+        cur.execute(
+            feedback_sql, 
+            (
+                new_serial_habit_id, 
+                feedback_text,         # Value for DB column: feedback_text
+                feedback_text,         # Value for DB column: coaching_feedback
+                improvement_tip        # Value for DB column: improvement_tip
+            )
+        )
         
         print(f"Saved analysis for new habit {new_serial_habit_id} (Cluster {hdbscan_cluster_id}).")
-        return new_serial_habit_id # Return the *database* ID
+        return new_serial_habit_id
         
     except (Exception, psycopg2.DatabaseError) as error:
         print(f"Error saving habit analysis: {error}")
         return None
+    
+def get_all_habits_for_user(cur, user_id):
+    cur.execute("""
+        SELECT 
+            h.cluster_id AS hdbscan_cluster_id,
+            h.habit_name,                   
+            h.confidence,
+            f.coaching_feedback AS feedback_text,
+            f.improvement_tip,
+            h.prime_example_mistake_id,
+            h.triggers_json,
+            COUNT(m.id) AS total_mistakes          
+        FROM 
+            habits h
+        JOIN 
+            feedback f ON f.habit_id = h.id
+        JOIN 
+            mistakes m ON m.habit_id = h.id           
+        WHERE 
+            h.user_id = %s
+        GROUP BY 
+            h.id, f.id, h.cluster_id, h.habit_name, h.confidence, f.coaching_feedback, 
+            f.improvement_tip, h.prime_example_mistake_id, h.triggers_json
+        ORDER BY 
+            h.confidence DESC;
+    """, (user_id,))
+    
+    columns = [
+        "hdbscan_cluster_id", "habit_name", "confidence", "feedback_text", 
+        "improvement_tip", "prime_example_mistake_id", "triggers_json", "total_mistakes"
+    ]
+    return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+def update_user_info(cur, user_id, new_name, new_chess_username):
+    """
+    Updates the user's name and linked chess.com username in the 'users' table.
+    """
+    # SQL to update the user's name and chess_com_username based on their ID
+    update_sql = """
+    UPDATE users 
+    SET name = %s, chess_com_username = %s
+    WHERE id = %s
+    RETURNING id;
+    """
+    
+    try:
+        cur.execute(update_sql, (new_name, new_chess_username, user_id))
+        
+        if cur.rowcount == 0:
+            print(f"Error: User with ID {user_id} not found for update.")
+            return False
+            
+        print(f"Successfully updated user ID {user_id}. Name: {new_name}, Chess Username: {new_chess_username}")
+        return True
+        
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(f"Error updating user info: {error}")
+        return False

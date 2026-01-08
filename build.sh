@@ -3,20 +3,21 @@
 # Exit on error
 set -o errexit
 
+# 1. Install Python dependencies
 pip install -r requirements.txt
 
-echo "Cloning Stockfish source..."
-git clone --depth 1 https://github.com/official-stockfish/Stockfish.git stockfish-source
+# 2. Download pre-compiled Stockfish for Ubuntu Linux
+echo "Downloading Stockfish binary..."
+wget https://github.com/official-stockfish/Stockfish/releases/latest/download/stockfish-ubuntu-x86-64-avx2.tar.xz
 
-echo "Compiling Stockfish..."
-cd stockfish-source/src
-make -j profile-build ARCH=x86-64-avx2 COMP=gcc
+# 3. Extract and move
+tar -xf stockfish-ubuntu-x86-64-avx2.tar.xz
+# The folder inside the tar is usually named 'stockfish'
+mv stockfish/stockfish-ubuntu-x86-64-avx2 ./stockfish-binary
 
-echo "Copying compiled binary and cleaning up..."
-cp ./stockfish ../../stockfish-binary 
+# 4. Clean up
+rm -rf stockfish stockfish-ubuntu-x86-64-avx2.tar.xz
 
-cd ../.. # Back to root
-rm -rf stockfish-source
-
+# 5. Ensure permissions
 chmod +x ./stockfish-binary
-echo "Stockfish binary is now installed at ./stockfish-binary"
+echo "Stockfish binary is ready at ./stockfish-binary"

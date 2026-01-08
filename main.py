@@ -9,6 +9,8 @@ import requests
 import json
 import traceback
 import chess.engine
+from datetime import date
+from dateutil.relativedelta import relativedelta
 
 try:
     from backend import matches
@@ -315,38 +317,136 @@ def analyze_games():
     if not chess_username:
         return jsonify({"error": "No Chess.com account is linked."}), 400
 
+    # 1. Access the dates from the JSON request body
+    data = request.json
+    start_month_year = data.get('start_month_year')
+    end_month_year = data.get('end_month_year')
+
+    if not start_month_year or not end_month_year:
+        return jsonify({"error": "Missing start or end month/year parameters."}), 400
+
     print(f"--- Analysis Request Started for user {user_id} ({chess_username}) ---")
 
+    db_conn = None
     try:
         db_conn = get_db()
         engine = get_engine()
 
-        print(f"Running ingest for {chess_username}...")
-        # November 2025 for now
-        matches.process_user_games(chess_username, 2025, 11, engine, db_conn)
-        print("Ingest complete.")
-
-        print(f"Running analysis pipeline for user {user_id}...")
+        # 2. Parse the YYYY-MM strings into date objects
+        start_year, start_month = map(int, start_month_year.split('-'))
+        end_year, end_month = map(int, end_month_year.split('-'))
+        
+        start_dt = date(start_year, start_month, 1)
+        end_dt = date(end_year, end_month, 1)
+        
+        # 3. Iterate through the date range
+        current_dt = start_dt
+        while current_dt <= end_dt:
+            year = current_dt.year
+            month = current_dt.month
+            
+            print(f"Running ingest for {chess_username} - Month: {year}-{month:02d}...")
+            
+            # 4. Call the processing function for the current month
+            matches.process_user_games(chess_username, year, month, engine, db_conn)
+            
+            print(f"Ingest complete for {year}-{month:02d}.")
+            
+            # Move to the next month
+            current_dt += relativedelta(months=1) 
+        
+        # 5. Run the final analysis pipeline on all ingested data
+        print(f"Running final analysis pipeline for user {user_id}...")
         analysis_results = analysis.main_analysis_pipeline(user_id, db_conn)
         print("Analysis complete.")
         
+        # 6. *** NEW STEP: Fetch all generated habit details ***
+        with db_conn.cursor() as cur:
+            try:
+                # Assuming you add a function to analysis.py or db_helpers
+                all_habits_data = analysis.db_helpers.get_all_habits_for_user(cur, user_id)
+            except AttributeError:
+                all_habits_data = []
+
         db_conn.commit()
         print("--- Analysis Request Finished Successfully ---")
-        
+
         return jsonify({
             "success": True, 
             "message": "Analysis complete!",
-            "results": analysis_results
+            **analysis_results, 
+            "range": f"{start_month_year} to {end_month_year}",
+            "habits": all_habits_data
         }), 200
 
     except Exception as e:
-        db_conn = g.get('db', None)
         if db_conn:
             db_conn.rollback() 
             
         print(f"Error during analysis for {chess_username}: {e}")
         traceback.print_exc()
         return jsonify({"error": "An internal server error occurred during analysis."}), 500
+    
+@app.route('/api/user/update_options', methods=['POST'])
+@login_required
+def update_user_options():
+    """
+    Handles POST requests to update the user's name and Chess.com username.
+    Calls db_helpers.update_user_info.
+    """
+    if not analysis or not analysis.db_helpers:
+        return jsonify({"error": "Database helper module not loaded"}), 500
+
+    data = request.json
+    new_name = data.get('name')
+    new_chess_username = data.get('chess_com_username')
+    user_id = current_user.id
+    
+    # 1. Input Validation
+    if not new_name or not new_chess_username:
+        return jsonify({"error": "Name and Chess.com username are required"}), 400
+
+    db_conn = get_db()
+    cursor = None
+    try:
+        cursor = db_conn.cursor()
+        
+        # 2. Call the database helper function to update the user record
+        success = analysis.db_helpers.update_user_info(cursor, user_id, new_name, new_chess_username)
+        
+        if success:
+            db_conn.commit()
+            
+            # 3. Update the current_user object in the session immediately
+            # so the updated values are returned in the next /api/user/status call.
+            current_user.name = new_name
+            current_user.chess_com_username = new_chess_username
+            
+            return jsonify({
+                "success": True, 
+                "message": "Account details updated successfully."
+            }), 200
+        else:
+            db_conn.rollback()
+            # The db_helpers function prints an error, but we return a generic 500
+            return jsonify({"error": "Failed to update user details in the database."}), 500
+            
+    except psycopg2.Error as e:
+        db_conn.rollback()
+        # Handle potential unique constraint errors (e.g., if chess_com_username is unique)
+        if e.pgcode == '23505': 
+            return jsonify({"error": "That Chess.com username is already linked to another account."}), 409
+        print(f"Database error updating user options: {e}")
+        traceback.print_exc()
+        return jsonify({"error": "A database error occurred during update."}), 500
+    except Exception as e:
+        db_conn.rollback()
+        print(f"General error updating user options: {e}")
+        traceback.print_exc()
+        return jsonify({"error": "An internal server error occurred."}), 500
+    finally:
+        if cursor:
+            cursor.close()
     
 
 # --- Run the server ---
